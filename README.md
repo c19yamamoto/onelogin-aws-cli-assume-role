@@ -136,6 +136,21 @@ onelogin.cli.mfa-device-index=0
 
 `onelogin.cli.region` is the AWS region (`--region`), while `onelogin.sdk.region` stays the region of your OneLogin instance. The password and OTP token can't be set there.
 
+### Browser-based sign-in with WebAuthn/passkeys
+
+This Java CLI authenticates by calling OneLogin's SAML Assertion API with a username and password, then verifies an OTP through the OneLogin API when MFA is required. It does not start a browser sign-in or handle a WebAuthn challenge. Saving the password in a keychain removes the password prompt, but does not add browser-based MFA to this flow. This matches the [OneLogin AWS CLI flow](https://developers.onelogin.com/api-docs/1/samples/aws-cli/), which prompts for an MFA device and token.
+
+For browser-based sign-in with a OneLogin MFA policy, use the AWS CLI's `aws login` flow if your AWS console access is federated directly through IAM. It opens a browser for AWS console sign-in and uses the resulting console session to obtain temporary AWS credentials. OneLogin's user policy continues to control browser authentication, including WebAuthn/passkeys when configured. See [AWS CLI console sign-in](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html) and [OneLogin User Policies](https://support.onelogin.com/kb/4271392/user-policies).
+
+```sh
+aws login --profile dev
+aws sts get-caller-identity --profile dev
+```
+
+This requires AWS CLI v2.32.0 or later and the `SignInLocalDevelopmentAccess` policy on the IAM identity or federated role used for console access. Ask your AWS administrator to grant that permission if `aws login` is denied. This flow is provided by the AWS CLI; it does not use this Java tool's OneLogin API credentials or AWS App ID. For details, see [AWS Sign-In requirements](https://docs.aws.amazon.com/signin/latest/userguide/command-line-sign-in.html) and the [managed policy reference](https://docs.aws.amazon.com/aws-managed-policy/latest/reference/SignInLocalDevelopmentAccess.html).
+
+If your organization uses AWS IAM Identity Center instead, configure OneLogin as its external identity provider and use the AWS CLI's [IAM Identity Center sign-in](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html): run `aws configure sso`, then `aws sso login --profile dev`. In that setup, OneLogin manages MFA for the external identity provider, and AWS account access is assigned through IAM Identity Center permission sets. This is a different role-management model from this tool's AWS Multi Account app.
+
 ### How the process works
 
 #### Step 1. Provide OneLogin data.
