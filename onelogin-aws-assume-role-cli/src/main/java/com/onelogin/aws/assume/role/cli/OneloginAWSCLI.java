@@ -85,6 +85,8 @@ public class OneloginAWSCLI {
 	private static Integer samlApiVersion = 2;
 	private static String mfaOtpToken = null;
 	private static Integer mfaDeviceIndex = null;
+	private static boolean browserAuth = false;
+	private static String browserChannel = null;
 
 	public static Boolean commandParser(final String[] commandLineArguments) {
 		final CommandLineParser cmd = new DefaultParser();
@@ -92,6 +94,19 @@ public class OneloginAWSCLI {
 		CommandLine commandLine;
 		try {
 			commandLine = cmd.parse(options, commandLineArguments);
+			browserAuth = commandLine.hasOption("browser-auth");
+			if (commandLine.hasOption("browser-channel")) {
+				browserChannel = commandLine.getOptionValue("browser-channel");
+				if (!"chromium".equals(browserChannel) && !"chrome".equals(browserChannel)
+						&& !"msedge".equals(browserChannel)) {
+					System.err.println("--browser-channel must be chromium, chrome, or msedge");
+					return false;
+				}
+				if (!browserAuth) {
+					System.err.println("--browser-channel requires --browser-auth");
+					return false;
+				}
+			}
 			String value;
 
 			if (commandLine.hasOption("help")) {
@@ -253,7 +268,16 @@ public class OneloginAWSCLI {
 			}
 
 			if (((oneloginClientID != null && !oneloginClientID.isEmpty()) && (oneloginClientSecret == null || oneloginClientSecret.isEmpty())) || ((oneloginClientSecret != null && !oneloginClientSecret.isEmpty()) && (oneloginClientID == null || oneloginClientID.isEmpty()))) {
-				System.err.println("--onelogin-client-id and --onelogin-client-secret need to be set together");
+				if (!browserAuth) {
+					System.err.println("--onelogin-client-id and --onelogin-client-secret need to be set together");
+					return false;
+				}
+			}
+
+			if (browserAuth && (commandLine.hasOption("password") || commandLine.hasOption("otp-token")
+					|| commandLine.hasOption("mfa-device-index") || commandLine.hasOption("ip")
+					|| commandLine.hasOption("saml-api-version"))) {
+				System.err.println("--browser-auth completes authentication in the browser; remove --password, --otp-token, --mfa-device-index, --ip, and --saml-api-version");
 				return false;
 			}
 			return true;
@@ -275,6 +299,8 @@ public class OneloginAWSCLI {
 		options.addOption("a", "appid", true, "Set AWS App ID.");
 		options.addOption("d", "subdomain", true, "OneLogin Instance Sub Domain.");
 		options.addOption("u", "username", true, "OneLogin username.");
+		options.addOption(null, "browser-auth", false, "Sign in through a browser and the OneLogin app flow (supports WebAuthn/passkeys).");
+		options.addOption(null, "browser-channel", true, "Browser channel for browser authentication: chromium (default), chrome, or msedge.");
 		options.addOption(null, "password", true, "OneLogin password.");
 		options.addOption(null, "otp-token", true, "OTP Token for MFA. Used for the first MFA attempt only; retries fall back to the interactive prompt.");
 		options.addOption(null, "mfa-device-index", true, "Pre-select MFA device by zero-based index (skips the interactive device-selection prompt).");
@@ -347,42 +373,44 @@ public class OneloginAWSCLI {
 			return;
 		}
 
-		// OneLogin Java SDK Client
-		Client olClient;
-		if ((oneloginClientID == null || oneloginClientID.isEmpty()) && (oneloginClientSecret == null || oneloginClientSecret.isEmpty())) {
-			if (propertiesFromHome) {
-				// the SDK only loads its settings file from the classpath, so it gets the ones from ~/.onelogin passed in
-				olClient = new Client(getSetting(Settings.CLIENT_ID_KEY), getSetting(Settings.CLIENT_SECRET_KEY),
-						getSetting(Settings.REGION), getSetting(Settings.SUBDOMAIN), true);
-				if (ip == null) {
-					ip = getSetting(Settings.IP);
+		// The browser flow uses the configured OneLogin app directly and does not need API credentials.
+		Client olClient = null;
+		if (!browserAuth) {
+			if ((oneloginClientID == null || oneloginClientID.isEmpty()) && (oneloginClientSecret == null || oneloginClientSecret.isEmpty())) {
+				if (propertiesFromHome) {
+					// the SDK only loads its settings file from the classpath, so it gets the ones from ~/.onelogin passed in
+					olClient = new Client(getSetting(Settings.CLIENT_ID_KEY), getSetting(Settings.CLIENT_SECRET_KEY),
+							getSetting(Settings.REGION), getSetting(Settings.SUBDOMAIN), true);
+					if (ip == null) {
+						ip = getSetting(Settings.IP);
+					}
+				} else {
+					try {
+						olClient = new Client();
+					} catch (com.onelogin.sdk.exception.Error e) {
+						if (e.getErrorCode() != com.onelogin.sdk.exception.Error.SETTINGS_FILE_NOT_FOUND) {
+							throw e;
+						}
+						System.err.println("No " + PROPERTIES_FILE + " in " + HOME_PROPERTIES_FILE.getParent() + " or next to the jar:"
+								+ " create one, or pass --onelogin-client-id and --onelogin-client-secret");
+						System.exit(1);
+						return;
+					}
 				}
 			} else {
-				try {
-					olClient = new Client();
-				} catch (com.onelogin.sdk.exception.Error e) {
-					if (e.getErrorCode() != com.onelogin.sdk.exception.Error.SETTINGS_FILE_NOT_FOUND) {
-						throw e;
-					}
-					System.err.println("No " + PROPERTIES_FILE + " in " + HOME_PROPERTIES_FILE.getParent() + " or next to the jar:"
-							+ " create one, or pass --onelogin-client-id and --onelogin-client-secret");
-					System.exit(1);
-					return;
-				}
+				olClient = new Client(oneloginClientID, oneloginClientSecret, oneloginRegion);
 			}
-		} else {
-			olClient = new Client(oneloginClientID, oneloginClientSecret, oneloginRegion);
-		}
 
-		// Set the version of the OneLogin SAML API to use
-		HashMap<String, Integer> apic = new HashMap<String, Integer>();
-		apic.put("assertion", samlApiVersion);
-		olClient.setApiConfiguration(apic);
+			// Set the version of the OneLogin SAML API to use
+			HashMap<String, Integer> apic = new HashMap<String, Integer>();
+			apic.put("assertion", samlApiVersion);
+			olClient.setApiConfiguration(apic);
 
-		if (ip == null) {
-			ip = olClient.getIP();
+			if (ip == null) {
+				ip = olClient.getIP();
+			}
+			olClient.getAccessToken();
 		}
-		olClient.getAccessToken();
 		Scanner scanner = new Scanner(System.in);
 		int currentDuration = duration;
 		try {
@@ -397,21 +425,25 @@ public class OneloginAWSCLI {
 
 			for (int i = 0; i < loop; i++) {
 				if (i == 0) {
-					// Capture OneLogin Account Details
-					System.out.print("OneLogin Username: ");
-					if (oneloginUsernameOrEmail == null) {
-						oneloginUsernameOrEmail = scanner.next();
-					} else{
-						System.out.println(oneloginUsernameOrEmail);
-					}
-
-					if (oneloginPassword == null) {
-						System.out.print("OneLogin Password: ");
-						try {
-							oneloginPassword = String.valueOf(System.console().readPassword());
-						} catch (Exception e) {
-							oneloginPassword = scanner.next();
+					if (!browserAuth) {
+						// Capture OneLogin Account Details
+						System.out.print("OneLogin Username: ");
+						if (oneloginUsernameOrEmail == null) {
+							oneloginUsernameOrEmail = scanner.next();
+						} else{
+							System.out.println(oneloginUsernameOrEmail);
 						}
+
+						if (oneloginPassword == null) {
+							System.out.print("OneLogin Password: ");
+							try {
+								oneloginPassword = String.valueOf(System.console().readPassword());
+							} catch (Exception e) {
+								oneloginPassword = scanner.next();
+							}
+						}
+					} else {
+						System.out.println("OneLogin authentication will open in your browser.");
 					}
 					System.out.print("AWS App ID: ");
 					if (appId == null) {
@@ -430,10 +462,14 @@ public class OneloginAWSCLI {
 					TimeUnit.MINUTES.sleep(time);
 				}
 
-				result = getSamlResponse(olClient, scanner, oneloginUsernameOrEmail, oneloginPassword, appId,
-						oneloginDomain, mfaVerifyInfo, ip);
-				mfaVerifyInfo = (Map<String, String>) result.get("mfaVerifyInfo");
-				samlResponse = (String) result.get("samlResponse");
+				if (browserAuth) {
+					samlResponse = BrowserSamlAuthenticator.getSamlResponse(appId, oneloginDomain, browserChannel);
+				} else {
+					result = getSamlResponse(olClient, scanner, oneloginUsernameOrEmail, oneloginPassword, appId,
+							oneloginDomain, mfaVerifyInfo, ip);
+					mfaVerifyInfo = (Map<String, String>) result.get("mfaVerifyInfo");
+					samlResponse = (String) result.get("samlResponse");
+				}
 
 				if (i == 0) {
 					HttpRequest simulatedRequest = new HttpRequest("http://example.com");

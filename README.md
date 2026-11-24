@@ -88,11 +88,12 @@ aws-jsp
 
 ### Dependencies
 
-It works with Java7 and Java8.
+The CLI requires Java 8 or later.
 
 * [com.amazonaws:aws-java-sdk](https://github.com/aws/aws-sdk-java)
 * [com.onelogin:onelogin-java-sdk](https://github.com/onelogin/onelogin-java-sdk)
 * [com.onelogin:java-saml-core](https://github.com/onelogin/java-saml)
+* [com.microsoft.playwright:playwright](https://playwright.dev/java/)
 * javax.servlet:javax-servlet-api Required by the example Web project
 
 ## Getting started
@@ -138,24 +139,29 @@ onelogin.cli.mfa-device-index=0
 
 ### Browser-based sign-in with WebAuthn/passkeys
 
-This Java CLI authenticates by calling OneLogin's SAML Assertion API with a username and password, then verifies an OTP through the OneLogin API when MFA is required. It does not start a browser sign-in or handle a WebAuthn challenge. Saving the password in a keychain removes the password prompt, but does not add browser-based MFA to this flow. This matches the [OneLogin AWS CLI flow](https://developers.onelogin.com/api-docs/1/samples/aws-cli/), which prompts for an MFA device and token.
-
-For browser-based sign-in with a OneLogin MFA policy, use the AWS CLI's `aws login` flow if your AWS console access is federated directly through IAM. It opens a browser for AWS console sign-in and uses the resulting console session to obtain temporary AWS credentials. OneLogin's user policy continues to control browser authentication, including WebAuthn/passkeys when configured. See [AWS CLI console sign-in](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html) and [OneLogin User Policies](https://support.onelogin.com/kb/4271392/user-policies).
+The default mode uses OneLogin's SAML Assertion API and its interactive MFA-token flow. To use the MFA policy configured for your OneLogin AWS Multi Account app, including WebAuthn/passkeys, start the CLI with `--browser-auth`:
 
 ```sh
-aws login --profile dev
-aws sts get-caller-identity --profile dev
+java -jar onelogin-aws-cli.jar --browser-auth
 ```
 
-This requires AWS CLI v2.32.0 or later and the `SignInLocalDevelopmentAccess` policy on the IAM identity or federated role used for console access. Ask your AWS administrator to grant that permission if `aws login` is denied. This flow is provided by the AWS CLI; it does not use this Java tool's OneLogin API credentials or AWS App ID. For details, see [AWS Sign-In requirements](https://docs.aws.amazon.com/signin/latest/userguide/command-line-sign-in.html) and the [managed policy reference](https://docs.aws.amazon.com/aws-managed-policy/latest/reference/SignInLocalDevelopmentAccess.html).
+This opens a visible Chromium browser at your OneLogin app launch page. Sign in and complete every factor required by your OneLogin policy in the browser. The CLI captures the SAML response for the AWS app, then continues with its usual AWS role selection and temporary credential flow. This mode does not need OneLogin API client credentials, a CLI password, or an OTP token. You can still pass `--appid` and `--subdomain` or set `onelogin.cli.appid` and `onelogin.cli.subdomain` in `onelogin.sdk.properties` to avoid those prompts.
 
-If your organization uses AWS IAM Identity Center instead, configure OneLogin as its external identity provider and use the AWS CLI's [IAM Identity Center sign-in](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html): run `aws configure sso`, then `aws sso login --profile dev`. In that setup, OneLogin manages MFA for the external identity provider, and AWS account access is assigned through IAM Identity Center permission sets. This is a different role-management model from this tool's AWS Multi Account app.
+Install Playwright's Chromium browser once before the first browser-mode run when using its default browser:
+
+```sh
+java -cp onelogin-aws-cli.jar com.microsoft.playwright.CLI install chromium
+```
+
+If your platform passkey is available through an installed Google Chrome or Microsoft Edge, you can select that browser with `--browser-channel chrome` or `--browser-channel msedge` instead of the bundled Chromium. Playwright supports these browser channels; the selected browser must already be installed.
+
+If your AWS access is configured through direct IAM federation or IAM Identity Center instead of a OneLogin AWS Multi Account app, the AWS CLI's browser sign-in flows may be a better fit: [`aws login`](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html) for direct federation, or [`aws configure sso` / `aws sso login`](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html) for IAM Identity Center.
 
 ### How the process works
 
 #### Step 1. Provide OneLogin data.
 
-- Provide OneLogin's username/mail and password to authenticate the user
+- In API mode, provide OneLogin's username/mail and password; in browser mode, complete sign-in and MFA in the browser
 - Provide the OneLogin's App ID to identify the AWS app
 - Provide the domain of your OneLogin's instance.
 
